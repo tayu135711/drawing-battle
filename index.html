@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ラクガキ王国</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Yusei+Magic&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#eaf2fb; --grid:rgba(70,130,200,.17);
+  --card:#ffffff; --ink:#26303f; --ink-soft:#66738a;
+  --accent:#ffc93c; --accent-ink:#26303f;
+  --hp:#3fc46d; --gauge:#ff9f1c; --danger:#e5383b;
+  --shadow:#26303f; --paper:#fffef9;
+  --font:"Yusei Magic","Hiragino Maru Gothic ProN","Yu Gothic UI","Meiryo",sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141d33; --grid:rgba(160,200,255,.07);
+    --card:#1f2b47; --ink:#eef3ff; --ink-soft:#9fb0d0; --shadow:#0a1020;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141d33; --grid:rgba(160,200,255,.07);
+  --card:#1f2b47; --ink:#eef3ff; --ink-soft:#9fb0d0; --shadow:#0a1020;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;min-height:100vh;background-color:var(--bg);
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:26px 26px;color:var(--ink);font-family:var(--font);line-height:1.5;
+  -webkit-tap-highlight-color:transparent;
+}
+#app{max-width:900px;margin:0 auto;padding:14px 14px 48px}
+#battleHost,#fieldHost,#vsHost{position:relative;flex:1 1 auto;min-height:0}
+#battle.active,#field.active,#vs.active{
+  position:fixed;inset:0;z-index:40;background:var(--bg);
+  display:flex;flex-direction:column;
+  padding:calc(8px + env(safe-area-inset-top,0px)) calc(8px + env(safe-area-inset-right,0px)) calc(8px + env(safe-area-inset-bottom,0px)) calc(8px + env(safe-area-inset-left,0px));
+}
+#battle.active .battle-top,#field.active .battle-top,#vs.active .battle-top,
+#battle.active .cards,#battle.active .hint,#field.active .hint,#vs.active .vs-box{flex:none}
+.screen{display:none}
+.screen.active{display:block}
+h1,h2,h3,p{margin:0}
+
+/* ---- buttons ---- */
+.btn{
+  font:inherit;color:var(--ink);background:var(--card);
+  border:3px solid var(--ink);border-radius:14px 18px 14px 20px;
+  padding:9px 16px;font-size:16px;cursor:pointer;
+  box-shadow:3px 3px 0 var(--shadow);transition:transform .08s,box-shadow .08s;
+}
+.btn:active:not(:disabled){transform:translate(2px,2px);box-shadow:1px 1px 0 var(--shadow)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:focus-visible,.sw:focus-visible,.card:focus-visible,#pad:focus-visible{outline:3px solid var(--gauge);outline-offset:2px}
+.btn.primary{background:var(--accent);color:var(--accent-ink)}
+.btn.sm{padding:4px 10px;font-size:13px;box-shadow:2px 2px 0 var(--shadow)}
+.btn.on{background:var(--accent);color:var(--accent-ink)}
+
+/* ---- home ---- */
+.logo{text-align:center;padding:20px 0 10px}
+.logo h1{
+  display:inline-block;font-size:clamp(40px,10vw,68px);line-height:1.1;letter-spacing:.03em;
+  transform:rotate(-2deg);text-shadow:4px 4px 0 var(--accent);
+}
+.logo p{margin-top:8px;color:var(--ink-soft);font-size:15px}
+.sec{font-size:20px;margin:22px 0 10px}
+.sec small{font-size:13px;color:var(--ink-soft)}
+.slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.slot{
+  background:var(--card);border:3px solid var(--ink);border-radius:18px 14px 20px 14px;
+  padding:8px;text-align:center;box-shadow:3px 3px 0 var(--shadow);
+  display:flex;flex-direction:column;align-items:center;gap:5px;min-height:212px;
+}
+.slot-img{width:100%;height:100px;display:grid;place-items:center;background:var(--paper);border-radius:10px;border:2px dashed var(--ink-soft)}
+.slot-img img{max-width:88%;max-height:90px;transform-origin:50% 100%;animation:wob 2.2s ease-in-out infinite}
+@keyframes wob{0%,100%{transform:scale(1,1)}50%{transform:scale(.95,1.06)}}
+@media (prefers-reduced-motion:reduce){.slot-img img{animation:none}.card.ready{animation:none}}
+.slot-name{font-size:16px;word-break:break-all;line-height:1.25}
+.slot-lv{font-size:12px;color:var(--ink-soft)}
+.slot-stats{font-size:12px;line-height:1.35}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;background:var(--bg);border:2px solid var(--ink);border-radius:999px;padding:1px 9px}
+.chip i{width:11px;height:11px;border-radius:50%;border:2px solid var(--ink);display:inline-block}
+.slot.empty{justify-content:center;border-style:dashed;background:transparent;box-shadow:none}
+.add{display:flex;flex-direction:column;align-items:center;gap:2px;padding:14px 10px;line-height:1.3}
+.add .plus{font-size:32px;line-height:1}
+.stages{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:10px}
+.stage{display:flex;flex-direction:column;gap:2px;text-align:left;padding:10px 12px}
+.stage .st-no{font-size:12px;color:var(--ink-soft)}
+.stage .st-name{font-size:17px;line-height:1.25}
+.stage .st-sub{font-size:12px;color:var(--ink-soft)}
+.stage.cleared{background:var(--accent);color:var(--accent-ink)}
+.stage.cleared .st-no,.stage.cleared .st-sub{color:inherit;opacity:.8}
+.hint{margin-top:10px;color:var(--ink-soft);font-size:14px}
+.howto{margin-top:26px;background:var(--card);border:3px solid var(--ink);border-radius:16px;padding:10px 14px}
+.howto summary{cursor:pointer;font-size:17px}
+.howto ul{margin:10px 0 6px;padding-left:20px;font-size:14px}
+.howto li{margin:4px 0}
+.dotc{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid var(--ink);vertical-align:-1px;margin-right:2px}
+.reset{margin-top:8px}
+
+/* ---- draw ---- */
+.top-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.top-row h2{font-size:20px}
+.draw-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+@media (min-width:780px){.draw-layout{grid-template-columns:minmax(0,480px) minmax(0,1fr)}}
+.paper-wrap{
+  position:relative;width:100%;max-width:480px;aspect-ratio:1/1;justify-self:center;
+  background-color:var(--paper);border:4px solid var(--ink);border-radius:18px;box-shadow:5px 5px 0 var(--shadow);
+  background-image:radial-gradient(rgba(38,48,63,.14) 1.4px,transparent 1.6px);background-size:24px 24px;overflow:hidden;
+}
+#pad{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair;-webkit-user-select:none;user-select:none}
+.pad-hint{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#8b93a1;font-size:20px;pointer-events:none;padding:20px}
+.side{display:flex;flex-direction:column;gap:12px;min-width:0}
+.toolbox{background:var(--card);border:3px solid var(--ink);border-radius:16px;padding:10px;display:flex;flex-direction:column;gap:9px}
+.palette{display:flex;flex-wrap:wrap;gap:8px}
+.sw{
+  width:40px;height:40px;border-radius:50%;background:var(--c);border:3px solid var(--ink);cursor:pointer;padding:0;
+  font-size:16px;display:grid;place-items:center;box-shadow:2px 2px 0 var(--shadow);
+}
+.sw.sel{outline:4px solid var(--gauge);outline-offset:2px}
+.sw.locked{background:var(--card);opacity:.6;cursor:not-allowed;box-shadow:none}
+.color-hint{font-size:13px;min-height:2.6em;color:var(--ink-soft)}
+.tool-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.size-btn{width:44px;height:38px;display:grid;place-items:center;padding:0}
+.size-btn i{display:block;background:var(--ink);border-radius:50%}
+.preview{background:var(--card);border:3px solid var(--ink);border-radius:16px;padding:10px 12px}
+.pv-empty{font-size:14px;color:var(--ink-soft)}
+.pv-row{display:grid;grid-template-columns:52px minmax(0,1fr) 42px;gap:8px;align-items:center;font-size:14px;margin:3px 0}
+.pv-row b{text-align:right}
+.bar{width:100%;height:11px;border:2px solid var(--ink);border-radius:8px;overflow:hidden;background:rgba(128,140,160,.25)}
+.bar i{display:block;height:100%;width:0;background:var(--hp);transition:width .25s}
+.bar.atk i{background:#e5383b}.bar.def i{background:#2f80ed}.bar.spd i{background:#f9c80e}
+.bar.sk i{background:var(--gauge);transition:none}
+.pv-skill{display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:14px}
+.pv-skill .dot{flex:none;width:16px;height:16px;border-radius:50%;border:3px solid var(--ink);margin-top:4px}
+.pv-skill small{display:block;color:var(--ink-soft);font-size:12px;line-height:1.35}
+.pv-power{margin-top:6px;font-size:14px}
+.pv-power b{font-size:20px}
+.opt-row{display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap}
+.side .opt-row{justify-content:flex-start}
+.opt-label{font-size:13px;color:var(--ink-soft)}
+.opt-hint{font-size:12px;color:var(--ink-soft);margin-top:-6px}
+.name-input{
+  font:inherit;font-size:16px;width:100%;padding:9px 12px;color:var(--ink);background:var(--card);
+  border:3px solid var(--ink);border-radius:12px;
+}
+.done-row{display:flex;gap:10px;flex-wrap:wrap}
+.done-row .primary{flex:1;min-width:140px;font-size:18px}
+
+/* ---- battle ---- */
+.battle-top{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap}
+.battle-top .ttl{font-size:16px;flex:1 1 100%;order:-1;text-align:center;padding:0 48px}
+.mode-note{font-size:12px;color:var(--ink-soft);margin:0 2px 8px}
+.ver{margin-top:4px;font-size:11px;color:var(--ink-soft)}
+.battle-top .grp{display:flex;gap:6px}
+.stage-wrap{position:relative;width:100%;height:100%;overflow:hidden;background:#8fd3ff}
+#glCv,#stageCv{position:absolute;inset:0;width:100%;height:100%;display:block}
+#stageCv{touch-action:manipulation}
+.stage-wrap.mode2d #glCv{display:none}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
+.card{
+  font:inherit;color:var(--ink);background:var(--card);border:3px solid var(--ink);border-radius:14px;padding:6px 6px 8px;
+  display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;box-shadow:3px 3px 0 var(--shadow);min-width:0;
+}
+.card img{height:46px;max-width:90%;object-fit:contain;background:var(--paper);border-radius:8px;padding:2px}
+.card .cname{font-size:13px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .csk{font-size:11px;color:var(--ink-soft);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .hpn{font-size:11px;color:var(--ink-soft)}
+.card.ready{border-color:var(--gauge);animation:pulse .6s ease-in-out infinite alternate}
+.card.ready .csk{color:var(--ink);font-weight:700}
+@keyframes pulse{from{transform:translateY(0)}to{transform:translateY(-4px)}}
+.card.dead{opacity:.45;filter:grayscale(1);cursor:default}
+
+/* ---- modal / toast ---- */
+.modal{position:fixed;inset:0;z-index:50;background:rgba(8,10,24,.66);display:grid;place-items:center;padding:16px;overflow:auto}
+.panel{width:min(440px,100%);background:var(--card);border:4px solid var(--ink);border-radius:22px;padding:18px;box-shadow:6px 6px 0 var(--shadow);text-align:center}
+.rtitle{font-size:34px;margin-bottom:6px}
+.rsub{font-size:15px;margin-bottom:8px}
+.rexp{font-size:16px;margin-bottom:8px}
+.rlist{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.rrow{display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:12px;padding:4px 10px;text-align:left;font-size:15px}
+.rrow img{width:44px;height:44px;object-fit:contain;background:var(--paper);border-radius:8px;padding:2px}
+.rrow .up{color:var(--danger);font-weight:700}
+.runlock{margin:8px 0;padding:6px 10px;border:2px dashed var(--ink);border-radius:12px;font-size:15px}
+.rtip{font-size:13px;color:var(--ink-soft);margin:6px 0}
+.rbtns{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.toast{
+  position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;background:var(--ink);color:var(--bg);
+  padding:10px 18px;border-radius:999px;z-index:60;pointer-events:none;transition:opacity .25s,transform .25s;max-width:90vw;text-align:center;font-size:15px;
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.stagecard{background:var(--card);border:3px solid var(--ink);border-radius:14px 18px 14px 20px;padding:10px 12px;box-shadow:3px 3px 0 var(--shadow);display:flex;flex-direction:column;gap:2px;text-align:left}
+.stagecard.cleared{background:var(--accent);color:var(--accent-ink)}
+.stagecard .st-no,.stagecard .st-sub{font-size:12px;color:var(--ink-soft)}
+.stagecard.cleared .st-no,.stagecard.cleared .st-sub{color:inherit;opacity:.8}
+.stagecard .st-name{font-size:17px;line-height:1.25}
+.st-btns{display:flex;gap:6px;margin-top:6px}
+.st-btns .btn{flex:1;padding:5px 6px;font-size:14px}
+#joy,#fieldMini{display:none;position:absolute;z-index:3}
+#joy{left:12px;bottom:12px;width:136px;height:136px;border-radius:50%;background:rgba(255,255,255,.2);border:3px solid rgba(255,255,255,.75);touch-action:none}
+#joyKnob{position:absolute;left:50%;top:50%;width:58px;height:58px;border-radius:50%;background:rgba(255,255,255,.9);border:3px solid var(--ink);transform:translate(-50%,-50%);pointer-events:none}
+#fieldMini{right:8px;top:8px;width:110px;height:110px;pointer-events:none}
+.stage-wrap.field #joy,.stage-wrap.field #fieldMini{display:block}
+#vsPlates{display:none;position:absolute;inset:0;pointer-events:none}
+.stage-wrap.vs #vsPlates{display:block}
+.vs-plate{position:absolute;display:flex;align-items:center;gap:8px;min-width:150px;max-width:66%;
+  background:linear-gradient(rgba(30,36,58,.92),rgba(18,22,38,.92));border:1px solid rgba(255,255,255,.4);
+  border-radius:999px;padding:5px 16px 5px 5px;color:#fff;box-shadow:0 4px 10px rgba(0,0,0,.4)}
+/* ひだり(-90)に ヒーロー、みぎ(+90)に てき が たっている ので、プレートも おなじがわに あわせる */
+.vs-plate.foe{top:8px;right:8px}
+.vs-plate.hero{bottom:8px;left:8px}
+.vs-portrait{width:38px;height:38px;flex:none;border-radius:50%;background:var(--paper);border:2px solid rgba(255,255,255,.85);object-fit:contain;box-shadow:0 2px 4px rgba(0,0,0,.3)}
+.vs-plate-body{flex:1;min-width:0}
+.vs-pname{font-size:13px;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.vs-plate .bar{height:8px;border:none;border-radius:999px;background:rgba(255,255,255,.2);box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+.vs-plate .bar i{border-radius:999px;transition:width .25s,background-color .25s}
+.vs-hpnum{font-size:11px;margin-top:2px;color:#e3e8f5;font-variant-numeric:tabular-nums}
+.vs-box{background:var(--card);border:3px solid var(--ink);border-radius:14px;padding:10px 12px;margin-top:10px;min-height:104px;display:flex;flex-direction:column;gap:8px}
+.vs-msg{font-size:15px;line-height:1.5;min-height:2.6em;margin:0;white-space:pre-line;cursor:pointer}
+.vs-menu{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.vs-menu .btn{font-size:14px;padding:9px 14px;text-align:left;display:flex;align-items:center;gap:10px;border-radius:999px}
+.vs-menu .btn .mv-text{display:flex;flex-direction:column;gap:1px;min-width:0}
+.vs-menu .btn b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vs-menu .btn small{font-weight:400;color:var(--ink-soft);font-size:11px}
+.vs-menu .dot{width:16px;height:16px;flex:none;margin:0}
+.vs-menu .full{grid-column:1/-1;align-items:center}
+.vs-sw-row{display:flex;align-items:center;gap:8px;grid-column:1/-1}
+.vs-sw-row img{width:36px;height:36px;object-fit:contain;background:var(--paper);border-radius:6px;flex:none}
+.dot{width:11px;height:11px;border-radius:50%;border:2px solid var(--ink);display:inline-block;margin-right:5px;vertical-align:-1px}
+.snd{position:fixed;right:10px;top:10px;z-index:45;width:42px;height:42px;padding:0;border-radius:50%;border:3px solid var(--ink);background:var(--card);font-size:20px;line-height:1;cursor:pointer;box-shadow:2px 2px 0 var(--shadow)}
+
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== ホーム ===== -->
+  <section id="home" class="screen active">
+    <header class="logo">
+      <h1>ラクガキ王国</h1>
+      <p>じぶんでかいた らくがきが、ほんとうに たたかいだす！</p>
+      <p class="ver" id="verLabel"></p>
+    </header>
+
+    <h2 class="sec">なかま <small>（さいだい3にん）</small></h2>
+    <div id="slots" class="slots"></div>
+
+    <h2 class="sec">ぼうけんにでる</h2>
+    <div id="stages" class="stages"></div>
+    <p id="homeHint" class="hint"></p>
+
+    <details class="howto" id="howto">
+      <summary>あそびかた</summary>
+      <ul>
+        <li>「ラクガキする」で キャラクターを かこう。えの <b>おおきさ・いろ・かたち</b> が そのままステータスになるよ！</li>
+        <li>おおきくかくと HPが たかく、ちいさくかくと こうげきが はやい。</li>
+        <li><span class="dotc" style="background:#e5383b"></span>あか＝ちから　<span class="dotc" style="background:#2f80ed"></span>あお＝HP・まもり　<span class="dotc" style="background:#3aa757"></span>みどり＝はやさ　<span class="dotc" style="background:#f9c80e"></span>きいろ＝クリティカル</li>
+        <li>いちばん おおく つかった いろで <b>ひっさつわざ</b> がきまるよ。</li>
+        <li>せんとうは じどうで すすむ。ゲージが たまったら キャラの カードを タップ！</li>
+        <li>ステージを クリアすると レベルアップ。あたらしい えのぐも てにはいるよ。</li>
+      </ul>
+      <button class="btn sm reset" id="resetBtn" type="button">データをぜんぶけす</button>
+    </details>
+  </section>
+
+  <!-- ===== ラクガキ ===== -->
+  <section id="draw" class="screen">
+    <div class="top-row">
+      <h2>ラクガキする</h2>
+      <button class="btn sm" id="cancelBtn" type="button">やめて もどる</button>
+    </div>
+    <div class="draw-layout">
+      <div class="paper-wrap">
+        <canvas id="pad" width="480" height="480" role="img" aria-label="おえかきキャンバス"></canvas>
+        <div class="pad-hint" id="padHint">ここに キャラクターを<br>かいてね！</div>
+      </div>
+      <div class="side">
+        <div class="toolbox">
+          <div class="palette" id="palette"></div>
+          <div class="color-hint" id="colorHint"></div>
+          <div class="tool-row">
+            <span id="sizes" class="tool-row"></span>
+            <button class="btn sm" id="eraser" type="button">けしごむ</button>
+            <button class="btn sm" id="undo" type="button">もどす</button>
+            <button class="btn sm" id="clear" type="button">ぜんぶけす</button>
+          </div>
+        </div>
+        <div class="preview">
+          <div class="pv-empty" id="pvEmpty">かいた えで ステータスが きまるよ。まずは えを かいてみよう！</div>
+          <div id="pvBody" hidden>
+            <div class="pv-row"><span>HP</span><div class="bar"><i id="bHp"></i></div><b id="nHp"></b></div>
+            <div class="pv-row"><span>ちから</span><div class="bar atk"><i id="bAtk"></i></div><b id="nAtk"></b></div>
+            <div class="pv-row"><span>まもり</span><div class="bar def"><i id="bDef"></i></div><b id="nDef"></b></div>
+            <div class="pv-row"><span>はやさ</span><div class="bar spd"><i id="bSpd"></i></div><b id="nSpd"></b></div>
+            <div class="pv-skill"><span class="dot" id="pvDot"></span><div><b id="pvSkill"></b><small id="pvSkillDesc"></small></div></div>
+            <div class="pv-power">ラクガキパワー <b id="pvPower"></b></div>
+          </div>
+        </div>
+        <div class="opt-row"><span class="opt-label">3Dの オプション</span><button class="btn sm opt" id="optHands" type="button" aria-pressed="false">手をつける</button><button class="btn sm opt" id="optFeet" type="button" aria-pressed="false">足をつける</button></div>
+        <p class="opt-hint">3Dの バトルで、手や足が ふわふわ ついてくるよ（あとから おしろでも かえられるよ）</p>
+        <input class="name-input" id="nameInput" type="text" maxlength="8" placeholder="なまえを つけてね（8もじまで）" autocomplete="off">
+        <div class="done-row">
+          <button class="btn primary" id="doneBtn" type="button" disabled>かんせい！ なかまにする</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== せんとう ===== -->
+  <section id="battle" class="screen">
+    <div class="battle-top">
+      <button class="btn sm" id="quitBtn" type="button">にげる</button>
+      <div class="ttl" id="stageTitle"></div>
+      <div class="grp">
+        <button class="btn sm" id="autoBtn" type="button">オート</button>
+        <button class="btn sm" id="modeBtn" type="button" title="3D / 2Dきりかえ">3D</button>
+        <button class="btn sm" id="speedBtn" type="button">×1</button>
+      </div>
+    </div>
+    <p class="mode-note" id="modeNote" hidden></p>
+    <div id="battleHost">
+    <div class="stage-wrap" id="stageWrap">
+      <canvas id="glCv" width="800" height="400" aria-hidden="true"></canvas>
+      <canvas id="stageCv" width="800" height="400" role="img" aria-label="せんとうがめん"></canvas>
+      <div id="joy" aria-label="スティック"><div id="joyKnob"></div></div>
+      <canvas id="fieldMini" width="110" height="110" aria-hidden="true"></canvas>
+      <div id="vsPlates">
+        <div class="vs-plate foe"><img class="vs-portrait" id="vsFoeThumb" alt=""><div class="vs-plate-body"><div class="vs-pname" id="vsFoeName"></div><div class="bar hp"><i id="vsFoeBar"></i></div></div></div>
+        <div class="vs-plate hero"><img class="vs-portrait" id="vsHeroThumb" alt=""><div class="vs-plate-body"><div class="vs-pname" id="vsHeroName"></div><div class="bar hp"><i id="vsHeroBar"></i></div><div class="vs-hpnum" id="vsHeroHpNum"></div></div></div>
+      </div>
+    </div>
+    </div>
+    <div class="cards" id="cards"></div>
+    <p class="hint">ゲージが たまった キャラの カードを タップで ひっさつわざ！</p>
+  </section>
+
+  <!-- ===== ポケモンふうバトル ===== -->
+  <section id="vs" class="screen">
+    <div class="battle-top">
+      <button class="btn sm" id="vsRunBtn" type="button">にげる</button>
+      <div class="ttl" id="vsTitle"></div>
+      <div class="grp">
+        <button class="btn sm" id="vsAutoBtn" type="button">オート</button>
+        <button class="btn sm" id="vsSpeedBtn" type="button">×1</button>
+      </div>
+    </div>
+    <div id="vsHost"></div>
+    <div class="vs-box">
+      <p class="vs-msg" id="vsMsg">　</p>
+      <div class="vs-menu" id="vsMenu" hidden></div>
+    </div>
+  </section>
+
+  <!-- ===== フィールドたんけん ===== -->
+  <section id="field" class="screen">
+    <div class="battle-top">
+      <button class="btn sm" id="fieldBack" type="button">おしろへ</button>
+      <div class="ttl" id="fieldTitle"></div>
+    </div>
+    <div id="fieldHost"></div>
+    <p class="hint" id="fieldHint"></p>
+  </section>
+</div>
+
+<div class="modal" id="modal" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<button class="snd" id="sndBtn" type="button" aria-label="おと">🔊</button>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
