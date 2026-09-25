@@ -837,6 +837,27 @@ function vsTypeMult(atkColor,defColor){
 const VS_MON_COLOR={slime:'blue',spiky:'red',ghost:'purple',bat:'black',golem:'orange',demon:'purple'};
 const VS_TACKLE={name:'たいあたり',desc:'からだで まっすぐ ぶつかる',kind:'smash',mult:1.7,color:'black'};
 const VS_MULT_FIX={yellow:1.9};   /* 群れがけ用に ひかえめだった いろを、1たい1むけに ちょうせい */
+/* ---- こうげきジャンケン：かった ほうだけ こうげき できる ---- */
+const VS_HANDS=[{id:'gu',emoji:'✊',name:'グー'},{id:'choki',emoji:'✌️',name:'チョキ'},{id:'pa',emoji:'✋',name:'パー'}];
+function vsJankenBeats(a,b){return (a==='gu'&&b==='choki')||(a==='choki'&&b==='pa')||(a==='pa'&&b==='gu');}
+function vsJankenJudge(p,e){if(p===e)return'tie';return vsJankenBeats(p,e)?'win':'lose';}
+/* モンスターごとの てのくせ（ボスは くせなし＝よみにくい）。れんぞく おなじ手も でにくくする */
+const VS_HAND_BIAS={slime:{gu:1.6,choki:0.7,pa:0.7},golem:{gu:1.6,choki:0.6,pa:0.8},
+  spiky:{gu:0.7,choki:1.6,pa:0.7},bat:{gu:0.7,choki:1.5,pa:0.8},ghost:{gu:0.7,choki:0.7,pa:1.6}};
+function vsHandBiasFor(mon){return(mon&&!mon.isBoss)?(VS_HAND_BIAS[mon.type]||null):null;}
+function vsHandHint(mon){
+  const b=vsHandBiasFor(mon);if(!b)return'';
+  let top='gu',tv=b.gu;if(b.choki>tv){top='choki';tv=b.choki;}if(b.pa>tv){top='pa';tv=b.pa;}
+  return '　（'+mon.name+'は　'+VS_HANDS.find(h=>h.id===top).name+'を　だしやすいかも…）';
+}
+function vsPickEnemyHand(S,mon){
+  const b=vsHandBiasFor(mon)||{gu:1,choki:1,pa:1};
+  const w={gu:b.gu,choki:b.choki,pa:b.pa};
+  if(S.lastMonHand)w[S.lastMonHand]*=0.4;   /* さっきと おなじ手は でにくい */
+  const total=w.gu+w.choki+w.pa;let r=S.rand()*total;
+  for(const id of['gu','choki','pa']){if(r<w[id])return id;r-=w[id];}
+  return'pa';
+}
 const VSBAL={baseHp:1,baseAtk:1,hpPerStage:0.4,atkPerStage:0.26,bossHp:2.5,bossAtk:1.55,fh:[1,1,1,1,1],fa:[1,1,1,1,1],monMult:1.5,bossMonMult:1.9,
   poisonPct:0.09,poisonTurns:4,shieldCut:0.35,shieldTurns:3,hasteTurns:3,paraTurns:3,paraChance:0.32,healPct:0.32,healAtkMul:0.6};
 
@@ -863,7 +884,7 @@ function vsCreate(party,queue,isBoss,stageIdx,seed){
   return {rand:mulberry32(seed>>>0),stageIdx:stageIdx,isBoss:!!isBoss,
     heroes:party.map((h,i)=>vsMakeHero(h,i)),active:0,
     queue:queue.slice(),idx:-1,mon:null,total:queue.length,defeated:0,
-    turn:0,result:null};
+    turn:0,result:null,janken:null,lastMonHand:null};
 }
 function vsCurHero(S){return S.heroes[S.active];}
 function vsAliveHeroes(S){return S.heroes.filter(h=>h.alive);}
@@ -871,6 +892,7 @@ function vsNextMon(S){
   S.idx++;
   if(S.idx>=S.queue.length){S.mon=null;return null;}
   S.mon=vsMakeMon(S.queue[S.idx],S.isBoss,S.stageIdx);
+  S.lastMonHand=null;   /* あいてが かわったら てのくせよみを リセット */
   return S.mon;
 }
 function vsSwitchTo(S,slot){
@@ -957,15 +979,32 @@ function vsRound(S,heroAction){
   const ev=[];
   if(S.result)return ev;
   const hero=vsCurHero(S),mon=S.mon;
-  const heroFirst=heroAction.type==='switch'||(hero.hasteT>0&&mon.hasteT<=0)?true:
-                   (mon.hasteT>0&&hero.hasteT<=0)?false: hero.spd>=mon.spd;
-  const order=heroFirst?[['hero',heroAction],['mon',null]]:[['mon',null],['hero',heroAction]];
-  for(const [side,action] of order){
-    if(side==='hero'&&!hero.alive)continue;
-    if(side==='mon'&&(!mon||!mon.alive))continue;
-    vsAct(S,ev,side,action);
-    if(vsFaintCheck(S,ev,mon)){S.defeated++;break;}
-    if(vsFaintCheck(S,ev,hero))break;
+  if(heroAction.type==='switch'){
+    /* こうたいは ジャンケンに かんけいなく いつも せいこうする。あいての こうげきは そのまま とんでくる */
+    vsAct(S,ev,'hero',heroAction);
+    if(mon&&mon.alive&&hero.alive)vsAct(S,ev,'mon',null);
+    if(vsFaintCheck(S,ev,mon))S.defeated++;
+    vsFaintCheck(S,ev,hero);
+  }else{
+    const jk=S.janken;S.janken=null;   /* このターンの ジャンケンけっかは 1かいだけ つかう */
+    if(jk==='win'){
+      vsAct(S,ev,'hero',heroAction);
+      if(vsFaintCheck(S,ev,mon))S.defeated++;
+    }else if(jk==='lose'){
+      vsAct(S,ev,'mon',null);
+      vsFaintCheck(S,ev,hero);
+    }else{
+      /* あいこ：りょうほう こうげきする（はやいほうが さきに）*/
+      const heroFirst=(hero.hasteT>0&&mon.hasteT<=0)?true:(mon.hasteT>0&&hero.hasteT<=0)?false:hero.spd>=mon.spd;
+      const order=heroFirst?[['hero',heroAction],['mon',null]]:[['mon',null],['hero',heroAction]];
+      for(const [side,action] of order){
+        if(side==='hero'&&!hero.alive)continue;
+        if(side==='mon'&&(!mon||!mon.alive))continue;
+        vsAct(S,ev,side,action);
+        if(vsFaintCheck(S,ev,mon)){S.defeated++;break;}
+        if(vsFaintCheck(S,ev,hero))break;
+      }
+    }
   }
   if(mon&&mon.alive&&hero.alive){vsTickStatus(S,ev,hero);vsTickStatus(S,ev,mon);vsFaintCheck(S,ev,mon)&&S.defeated++;vsFaintCheck(S,ev,hero);}
   S.turn++;
@@ -3244,6 +3283,7 @@ function vsSfxFor(ev){
     case 'status':return 'poison';
     case 'poison':return 'hit';
     case 'appear':return 'encounter';
+    case 'janken':return ev.result==='win'?'haste':ev.result==='lose'?'hurt':'tap';
     default:return null;
   }
 }
@@ -3298,6 +3338,45 @@ function vsShowMenu(){
     if(VS.auto){const slot=vsAutoSwitch(S);if(slot>=0){vsPlayerSwitch(slot,true);return;}}
     vsOpenSwitch(true);return;
   }
+  vsShowJankenMenu();
+}
+/* ---- こうげきジャンケン：わざを えらぶ まえに 1かい ---- */
+function vsShowJankenMenu(){
+  const S=VS.S;
+  const menu=$('#vsMenu');menu.innerHTML='';
+  menu.append(mk('p',{class:'hint',text:'こうげきジャンケン！ かった ほうだけ こうげき できる！'}));
+  const row=mk('div',{class:'vs-janken'});
+  VS_HANDS.forEach(hd=>{
+    const b=mk('button',{class:'btn',type:'button'},mk('span',{class:'jk-emoji',text:hd.emoji}),mk('span',{text:hd.name}));
+    b.addEventListener('click',()=>vsPlayerJanken(hd.id));
+    row.append(b);
+  });
+  menu.append(row);
+  menu.hidden=false;
+  $('#vsRunBtn').hidden=true;
+  if(VS.auto)vsPlayerJanken(VS_HANDS[Math.floor(S.rand()*3)].id);
+}
+function vsPlayerJanken(pid){
+  if(VS.steps.length)return;
+  $('#vsMenu').hidden=true;
+  const S=VS.S;
+  const eid=vsPickEnemyHand(S,S.mon);
+  S.lastMonHand=eid;
+  const result=vsJankenJudge(pid,eid);
+  S.janken=result;
+  const pn=VS_HANDS.find(x=>x.id===pid),en=VS_HANDS.find(x=>x.id===eid);
+  const msg=result==='win'?'せんせいの　かち！　こうげき　できる！':
+             result==='lose'?'せんせいの　まけ…　こうげき　できない！':
+             'あいこ！　りょうほう　こうげき！';
+  vsPushSteps([{ev:{t:'janken',result:result},text:pn.emoji+' vs '+en.emoji+'　'+msg}],vsShowMoveMenu);
+}
+function vsShowMoveMenu(){
+  if(VS.S.result)return;
+  const S=VS.S,h=vsCurHero(S);
+  if(!h.alive){
+    if(VS.auto){const slot=vsAutoSwitch(S);if(slot>=0){vsPlayerSwitch(slot,true);return;}}
+    vsOpenSwitch(true);return;
+  }
   const menu=$('#vsMenu');menu.innerHTML='';
   menu.append(vsMoveBtn(h.moves[0],'black',0));
   menu.append(vsMoveBtn(h.moves[1],h.color,1));
@@ -3324,7 +3403,7 @@ function vsOpenSwitch(forced){
   });
   if(!forced){
     const back=mk('button',{class:'btn full',type:'button',text:'もどる'});
-    back.addEventListener('click',vsShowMenu);
+    back.addEventListener('click',vsShowMoveMenu);
     menu.append(back);
   }else{
     menu.append(mk('p',{class:'hint',text:'つぎの　なかまを　えらんでね！'}));
@@ -3348,7 +3427,7 @@ function vsRouteAfter(events){
   if(!marker){vsShowMenu();return;}
   if(marker.t==='nextFoeReady'){
     vsNextMon(VS.S);vsPlaceUnits();vsRefreshPlates();
-    vsPushSteps([{ev:{t:'appear'},text:(VS.S.isBoss?'':'つぎに　')+VS.S.mon.name+'が　でてきた！'}],vsShowMenu);
+    vsPushSteps([{ev:{t:'appear'},text:(VS.S.isBoss?'':'つぎに　')+VS.S.mon.name+'が　でてきた！'+vsHandHint(VS.S.mon)}],vsShowMenu);
   }else if(marker.t==='needSwitch'){
     vsOpenSwitch(true);
   }else if(marker.t==='end'){
@@ -3452,7 +3531,7 @@ function startVsBattle(e){
   if(e.boss)sndScene('boss');
   sizeGL(true);
   vsRefreshPlates();
-  const introText=(e.boss?'ボスの　':'やせいの　')+VS.S.mon.name+(e.boss?'が　たちふさがった！':'が　あらわれた！');
+  const introText=(e.boss?'ボスの　':'やせいの　')+VS.S.mon.name+(e.boss?'が　たちふさがった！':'が　あらわれた！')+vsHandHint(VS.S.mon);
   vsPushSteps([
     {ev:{t:'appear'},text:introText},
     {ev:{t:'switch',unit:vsCurHero(VS.S)},text:vsEventText({t:'switch',unit:vsCurHero(VS.S)})}
