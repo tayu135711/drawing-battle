@@ -100,6 +100,7 @@ const DEFAULT_NAMES=['ラクガキくん','ぽよぽよ','ゴンザレス','ぷ�
 const MAX_LV=10;
 const expNeed=lv=>30+lv*20;
 const MIN_INK=220;
+const EVO_BONUS=0.25;   /* しんか(Lv.MAXで1回だけ・えを かきたす)のボーナス */
 
 /* =====================================================================
    セーブデータ
@@ -116,7 +117,7 @@ function load(){
     if(!raw)return;
     const o=JSON.parse(raw);
     if(o&&Array.isArray(o.party)){
-      state.party=o.party.filter(validHero).slice(0,3).map(h=>{h.lv=clamp(h.lv|0||1,1,MAX_LV);h.exp=Math.max(0,h.exp|0);h.limbs={hands:!!(h.limbs&&h.limbs.hands),feet:!!(h.limbs&&h.limbs.feet)};return h;});
+      state.party=o.party.filter(validHero).slice(0,3).map(h=>{h.lv=clamp(h.lv|0||1,1,MAX_LV);h.exp=Math.max(0,h.exp|0);h.evo=(h.evo|0)>0?1:0;h.limbs={hands:!!(h.limbs&&h.limbs.hands),feet:!!(h.limbs&&h.limbs.feet)};return h;});
       state.cleared=clamp(o.cleared|0,0,STAGES.length);
     }
   }catch(e){}
@@ -124,8 +125,9 @@ function load(){
 function save(){try{localStorage.setItem(SAVE_KEY,JSON.stringify(state));}catch(e){}}
 
 function heroStats(h){
-  const m=1+0.1*(h.lv-1);
-  return {hp:Math.round(h.hp*m),atk:Math.round(h.atk*m),def:Math.round(h.def*(1+0.06*(h.lv-1))),interval:h.interval,crit:h.crit};
+  const e=1+EVO_BONUS*(h.evo?1:0);   /* しんかボーナス */
+  const m=(1+0.1*(h.lv-1))*e;
+  return {hp:Math.round(h.hp*m),atk:Math.round(h.atk*m),def:Math.round(h.def*(1+0.06*(h.lv-1))*e),interval:h.interval,crit:h.crit};
 }
 function powerOf(st){return Math.round(st.hp/4+st.atk*4+st.def*3+(1.9-st.interval)*30+st.crit*40);}
 
@@ -161,13 +163,16 @@ function renderHome(){
       const el=mk('div',{class:'slot'});
       el.append(
         mk('div',{class:'slot-img'},mk('img',{alt:hero.name,src:hero.img})),
-        mk('div',{class:'slot-name',text:hero.name}),
+        mk('div',{class:'slot-name',text:(hero.evo?'★ ':'')+hero.name}),
         mk('div',{class:'slot-lv',text:'Lv.'+hero.lv+'　パワー '+powerOf(st)}),
         mk('div',{class:'slot-stats',text:'HP'+st.hp+' ちから'+st.atk+' まもり'+st.def}),
         skillChip(hero.skill),
         mk('div',{class:'opt-row'},limbBtn(hero,'hands','手'),limbBtn(hero,'feet','足')),
         mk('button',{class:'btn sm',type:'button',text:'かきなおす',onclick:()=>openDraw(i)})
       );
+      if(hero.lv>=MAX_LV&&!hero.evo){
+        el.append(mk('button',{class:'btn sm evo-btn',type:'button',title:'えを かきたして パワーアップ！（1かいだけ）',text:'✨ しんかする！',onclick:()=>openEvolve(i)}));
+      }
       slots.append(el);
     }else{
       slots.append(mk('div',{class:'slot empty'},
@@ -229,8 +234,18 @@ function drawStroke(s){
   pctx.lineTo(p[p.length-1][0],p[p.length-1][1]);
   pctx.stroke();pctx.restore();
 }
+let baseImg=null,evolveSlot=-1;   /* しんか中は いまの えを した地にして かきたす */
+function drawBase(){
+  if(!baseImg||!baseImg.complete||!baseImg.naturalWidth)return;
+  const box=300,k=Math.min(box/baseImg.naturalWidth,box/baseImg.naturalHeight,2.2);
+  const w=baseImg.naturalWidth*k,h=baseImg.naturalHeight*k;
+  pctx.save();pctx.globalCompositeOperation='source-over';
+  pctx.drawImage(baseImg,(pad.width-w)/2,(pad.height-h)/2,w,h);
+  pctx.restore();
+}
 function redraw(){
   pctx.clearRect(0,0,pad.width,pad.height);
+  drawBase();
   for(const s of strokes)drawStroke(s);
 }
 function padPos(e){
@@ -346,7 +361,7 @@ function updatePreview(){
   try{a=analyze();}catch(e){a={total:0,counts:{}};}
   const ok=a.total>=MIN_INK;
   $('#pvEmpty').hidden=ok;$('#pvBody').hidden=!ok;
-  $('#doneBtn').disabled=!ok;
+  $('#doneBtn').disabled=!ok||(evolveSlot>=0&&!strokes.length);
   if(!ok)return;
   const b=computeBase(a);
   const spd=clamp((1.9-b.interval)/1.3,0,1);
@@ -369,7 +384,14 @@ function syncOpts(){
 }
 $('#optHands').addEventListener('click',()=>{drawOpts.hands=!drawOpts.hands;syncOpts();});
 $('#optFeet').addEventListener('click',()=>{drawOpts.feet=!drawOpts.feet;syncOpts();});
+function setDrawTitle(evo){
+  const h=$('#draw h2');if(h)h.textContent=evo?'✨ しんか！ えを かきたそう':'ラクガキする';
+  $('#doneBtn').textContent=evo?'しんかする！':$('#doneBtn').dataset.label||$('#doneBtn').textContent;
+}
 function openDraw(i){
+  baseImg=null;evolveSlot=-1;
+  if(!$('#doneBtn').dataset.label)$('#doneBtn').dataset.label=$('#doneBtn').textContent;
+  setDrawTitle(false);
   drawSlot=Math.min(i,state.party.length);
   const exist=state.party[drawSlot];
   drawOpts.hands=!!(exist&&exist.limbs&&exist.limbs.hands);drawOpts.feet=!!(exist&&exist.limbs&&exist.limbs.feet);syncOpts();
@@ -379,6 +401,25 @@ function openDraw(i){
   $('#padHint').hidden=false;
   buildTools();redraw();updatePreview();
   show('draw');
+}
+function openEvolve(i){
+  const hero=state.party[i];
+  if(!hero||hero.lv<MAX_LV||hero.evo)return;
+  if(!$('#doneBtn').dataset.label)$('#doneBtn').dataset.label=$('#doneBtn').textContent;
+  drawSlot=i;evolveSlot=i;
+  drawOpts.hands=!!(hero.limbs&&hero.limbs.hands);drawOpts.feet=!!(hero.limbs&&hero.limbs.feet);syncOpts();
+  strokes=[];cur=null;tool.erase=false;
+  if((PAL[tool.color].unlock||0)>state.cleared)tool.color='black';
+  $('#nameInput').value=hero.name;
+  $('#padHint').hidden=true;
+  setDrawTitle(true);
+  buildTools();
+  baseImg=new Image();
+  baseImg.onload=()=>{redraw();updatePreview();};
+  baseImg.src=hero.img;
+  redraw();updatePreview();
+  show('draw');
+  toast('いまの えに かきたして パワーアップ！ （1かいだけ）');
 }
 function finishDrawing(){
   let a;
@@ -395,6 +436,20 @@ function finishDrawing(){
   out.getContext('2d').drawImage(pad,sx,sy,bw,bh,0,0,out.width,out.height);
   let name=$('#nameInput').value.trim();
   if(!name)name=DEFAULT_NAMES[Math.floor(Math.random()*DEFAULT_NAMES.length)];
+  if(evolveSlot>=0&&state.party[evolveSlot]){
+    const old=state.party[evolveSlot];
+    if(!strokes.length){toast('なにか かきたしてね！');return;}
+    old.img=out.toDataURL('image/png');
+    old.name=name.slice(0,8);
+    old.hp=Math.max(old.hp,b.hp);old.atk=Math.max(old.atk,b.atk);old.def=Math.max(old.def,b.def);
+    old.interval=Math.min(old.interval,b.interval);old.crit=Math.max(old.crit,b.crit);
+    old.skill=b.skill;old.evo=1;
+    old.limbs={hands:drawOpts.hands,feet:drawOpts.feet};
+    baseImg=null;evolveSlot=-1;setDrawTitle(false);
+    save();renderHome();show('home');
+    toast('★ '+old.name+' が しんかした！ パワーが 25% アップ！');
+    return;
+  }
   const hero={
     name:name.slice(0,8),img:out.toDataURL('image/png'),
     hp:b.hp,atk:b.atk,def:b.def,interval:b.interval,crit:b.crit,skill:b.skill,lv:1,exp:0,
@@ -405,7 +460,7 @@ function finishDrawing(){
   toast(hero.name+' が なかまに なった！');
 }
 $('#doneBtn').addEventListener('click',finishDrawing);
-$('#cancelBtn').addEventListener('click',()=>{renderHome();show('home');});
+$('#cancelBtn').addEventListener('click',()=>{baseImg=null;evolveSlot=-1;setDrawTitle(false);renderHome();show('home');});
 
 /* =====================================================================
    てきのスプライト（てがきふうに プログラムで かく）
