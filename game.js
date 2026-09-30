@@ -103,6 +103,7 @@ const expNeed=lv=>30+lv*20;
 const MIN_INK=220;
 const DQ_BONUS=0.1;    /* 「きょうのおだい」クリアで そのキャラに +10% */
 const EVO_BONUS=0.25;   /* しんか(Lv.MAXで1回だけ・えを かきたす)のボーナス */
+const EVO_BONUS=0.25;   /* しんか(Lv.MAXで1回だけ・えを かきたす)のボーナス */
 
 /* =====================================================================
    セーブデータ
@@ -411,6 +412,9 @@ function renderHome(){
       if(hero.lv>=MAX_LV&&!hero.evo){
         el.append(mk('button',{class:'btn sm evo-btn',type:'button',title:'えを かきたして パワーアップ！（1かいだけ）',text:'✨ しんかする！',onclick:()=>openEvolve(i)}));
       }
+      if(hero.lv>=MAX_LV&&!hero.evo){
+        el.append(mk('button',{class:'btn sm evo-btn',type:'button',title:'えを かきたして パワーアップ！（1かいだけ）',text:'✨ しんかする！',onclick:()=>openEvolve(i)}));
+      }
       slots.append(el);
     }else{
       slots.append(mk('div',{class:'slot empty'},
@@ -515,6 +519,15 @@ function drawStroke(s){
   }
 }
 let baseImg=null,evolveSlot=-1,equipSlot=-1;   /* しんか中は いまの えを した地にして かきたす */
+function drawBase(){
+  if(!baseImg||!baseImg.complete||!baseImg.naturalWidth)return;
+  const box=300,k=Math.min(box/baseImg.naturalWidth,box/baseImg.naturalHeight,2.2);
+  const w=baseImg.naturalWidth*k,h=baseImg.naturalHeight*k;
+  pctx.save();pctx.globalCompositeOperation='source-over';
+  pctx.drawImage(baseImg,(pad.width-w)/2,(pad.height-h)/2,w,h);
+  pctx.restore();
+}
+let baseImg=null,evolveSlot=-1;   /* しんか中は いまの えを した地にして かきたす */
 function drawBase(){
   if(!baseImg||!baseImg.complete||!baseImg.naturalWidth)return;
   const box=300,k=Math.min(box/baseImg.naturalWidth,box/baseImg.naturalHeight,2.2);
@@ -739,7 +752,12 @@ function openEvolve(i){
   const hero=state.party[i];
   if(!hero||hero.lv<MAX_LV||hero.evo)return;
   if(!$('#doneBtn').dataset.label)$('#doneBtn').dataset.label=$('#doneBtn').textContent;
+  if(!hero||hero.lv<MAX_LV||hero.evo)return;
+  if(!$('#doneBtn').dataset.label)$('#doneBtn').dataset.label=$('#doneBtn').textContent;
   drawSlot=i;evolveSlot=i;equipSlot=-1;
+  drawOpts.hands=!!(hero.limbs&&hero.limbs.hands);drawOpts.feet=!!(hero.limbs&&hero.limbs.feet);syncOpts();
+  strokes=[];cur=null;tool.erase=false;
+  if((PAL[tool.color].unlock||0)>state.cleared)tool.color='black';
   drawOpts.hands=!!(hero.limbs&&hero.limbs.hands);drawOpts.feet=!!(hero.limbs&&hero.limbs.feet);syncOpts();
   strokes=[];cur=null;tool.erase=false;
   if((PAL[tool.color].unlock||0)>state.cleared)tool.color='black';
