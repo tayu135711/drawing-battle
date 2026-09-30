@@ -7,6 +7,7 @@
 const $=(s,el)=>(el||document).querySelector(s);
 const $$=(s,el)=>Array.from((el||document).querySelectorAll(s));
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const has=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);   /* '__proto__' などを はじく ための しらべ */
 const lerp=(a,b,t)=>a+(b-a)*t;
 const FONT='"Yusei Magic","Hiragino Maru Gothic ProN","Yu Gothic UI",Meiryo,sans-serif';
 const INK='#2a2a2e';
@@ -100,14 +101,16 @@ const DEFAULT_NAMES=['ラクガキくん','ぽよぽよ','ゴンザレス','ぷ�
 const MAX_LV=10;
 const expNeed=lv=>30+lv*20;
 const MIN_INK=220;
+const DQ_BONUS=0.1;    /* 「きょうのおだい」クリアで そのキャラに +10% */
+const EVO_BONUS=0.25;   /* しんか(Lv.MAXで1回だけ・えを かきたす)のボーナス */
 
 /* =====================================================================
    セーブデータ
    ===================================================================== */
 const SAVE_KEY='rakugaki-kingdom-v1';
-let state={party:[],cleared:0};
+let state={party:[],cleared:0,dq:'',dqCount:0,dex:{},ach:null,title:'',shared:0,received:0};
 function validHero(h){
-  return h&&typeof h.img==='string'&&h.img.indexOf('data:image/')===0&&typeof h.name==='string'&&SKILLS[h.skill]&&
+  return h&&typeof h.img==='string'&&h.img.indexOf('data:image/')===0&&typeof h.name==='string'&&typeof h.skill==='string'&&has(SKILLS,h.skill)&&
     isFinite(h.hp)&&isFinite(h.atk)&&isFinite(h.def)&&isFinite(h.interval)&&isFinite(h.crit);
 }
 function load(){
@@ -116,16 +119,59 @@ function load(){
     if(!raw)return;
     const o=JSON.parse(raw);
     if(o&&Array.isArray(o.party)){
-      state.party=o.party.filter(validHero).slice(0,3).map(h=>{h.lv=clamp(h.lv|0||1,1,MAX_LV);h.exp=Math.max(0,h.exp|0);h.limbs={hands:!!(h.limbs&&h.limbs.hands),feet:!!(h.limbs&&h.limbs.feet)};return h;});
+      state.party=o.party.filter(validHero).slice(0,3).map(h=>{h.lv=clamp(h.lv|0||1,1,MAX_LV);h.exp=Math.max(0,h.exp|0);h.evo=(h.evo|0)>0?1:0;h.dq=(h.dq|0)>0?1:0;h.item=validItem(h.item)?h.item:null;h.limbs={hands:!!(h.limbs&&h.limbs.hands),feet:!!(h.limbs&&h.limbs.feet)};return h;});
       state.cleared=clamp(o.cleared|0,0,STAGES.length);
+      state.shared=Math.max(0,o.shared|0);state.received=Math.max(0,o.received|0);state.title=typeof o.title==='string'?o.title:'';
+      state.ach=(o.ach&&typeof o.ach==='object')?Object.keys(o.ach).reduce((r,k)=>{if(o.ach[k])r[k]=1;return r;},{}):null;
+      state.dq=typeof o.dq==='string'?o.dq:'';state.dex={};if(o.dex&&typeof o.dex==='object'){Object.keys(o.dex).forEach(k=>{const n=o.dex[k]|0;if(n>0)state.dex[k]=Math.min(n,99999);});}state.dqCount=Math.max(0,o.dqCount|0);
     }
   }catch(e){}
 }
 function save(){try{localStorage.setItem(SAVE_KEY,JSON.stringify(state));}catch(e){}}
 
+/* ---- そうび：じぶんで かいた アイテム。いろで こうかが かわる ---- */
+const ITEM_NOUN={red:'つるぎ',orange:'ハンマー',purple:'まどうしょ',blue:'たて',green:'ブーツ',yellow:'かんむり',pink:'おまもり',black:'よろい'};
+const ITEM_MIN_INK=120;
+function validItem(it){
+  return !!(it&&typeof it.img==='string'&&it.img.indexOf('data:image/')===0&&typeof it.kind==='string'&&has(PAL,it.kind)&&isFinite(it.power)&&typeof it.name==='string');
+}
+function itemFrom(a){
+  let kind='black',bv=-1;
+  PALETTE.forEach(p=>{const v=a.counts[p.id]||0;if(v>bv){bv=v;kind=p.id;}});
+  const fill=a.total/((pad.width/2)*(pad.height/2));
+  const power=Math.round(clamp(fill/0.05,0.1,1)*100)/100;
+  return {kind:kind,power:power,name:itemName(kind,power)};
+}
+function itemName(kind,power){
+  const size=power>=0.75?'でっかい ':(power<=0.3?'ちいさな ':'');
+  return size+PAL[kind].name+'の '+ITEM_NOUN[kind];
+}
+function itemPct(it){return Math.round((0.05+0.20*it.power)*100);}
+function itemDesc(it){
+  const n=itemPct(it);
+  switch(it.kind){
+    case 'red':case 'orange':case 'purple':return 'ちから +'+n+'%';
+    case 'blue':return 'まもり +'+n+'%　HP +'+Math.round(n/2)+'%';
+    case 'green':return 'こうげきが はやくなる（+'+n+'%）';
+    case 'yellow':return 'クリティカル +'+Math.round(n*0.8)+'%';
+    case 'pink':return 'HP +'+n+'%';
+    default:return 'HP +'+Math.round(n/2)+'%　まもり +'+Math.round(n/2)+'%';
+  }
+}
 function heroStats(h){
-  const m=1+0.1*(h.lv-1);
-  return {hp:Math.round(h.hp*m),atk:Math.round(h.atk*m),def:Math.round(h.def*(1+0.06*(h.lv-1))),interval:h.interval,crit:h.crit};
+  const e=1+EVO_BONUS*(h.evo?1:0)+DQ_BONUS*(h.dq?1:0);   /* しんかボーナス */
+  const m=(1+0.1*(h.lv-1))*e;
+  let hpK=1,atkK=1,defK=1,iv=h.interval,cr=h.crit;
+  if(validItem(h.item)){
+    const k=h.item.kind,f=0.05+0.20*h.item.power;
+    if(k==='red'||k==='orange'||k==='purple')atkK+=f;
+    else if(k==='blue'){defK+=f;hpK+=f/2;}
+    else if(k==='green')iv=Math.max(0.6,Math.round(iv*(1-f*0.8)*100)/100);
+    else if(k==='yellow')cr=Math.min(0.95,Math.round((cr+f*0.8)*100)/100);
+    else if(k==='pink')hpK+=f;
+    else{hpK+=f/2;defK+=f/2;}
+  }
+  return {hp:Math.round(h.hp*m*hpK),atk:Math.round(h.atk*m*atkK),def:Math.round(h.def*(1+0.06*(h.lv-1))*e*defK),interval:iv,crit:cr};
 }
 function powerOf(st){return Math.round(st.hp/4+st.atk*4+st.def*3+(1.9-st.interval)*30+st.crit*40);}
 
@@ -138,6 +184,194 @@ function show(id){
 /* =====================================================================
    ホーム画面
    ===================================================================== */
+/* ---- きょうのおだい：まいにち かわる かきかたの しばり ---- */
+const DQ_LIST=[
+  {text:'3しょく いかで かこう',check:m=>m.colors>=1&&m.colors<=3},
+  {text:'おおきく どーんと かこう',check:m=>m.fill>=0.14},
+  {text:'ちいさく こぢんまり かこう',check:m=>m.fill<=0.05},
+  {text:'4しょく いじょう つかおう',check:m=>m.colors>=4},
+  {text:'あかを メインに（5わり いじょう）',check:m=>m.share.red>=0.5},
+  {text:'あおを メインに（5わり いじょう）',check:m=>m.share.blue>=0.5},
+  {text:'みどりを メインに（5わり いじょう）',check:m=>m.share.green>=0.5},
+  {text:'きいろを メインに（5わり いじょう）',check:m=>m.share.yellow>=0.5}
+];
+function dqKey(){const d=new Date();return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();}
+function dqToday(){return DQ_LIST[hashStr('rk-dq-'+dqKey())%DQ_LIST.length];}
+function dqMetrics(a){
+  const share={};let colors=0;
+  PALETTE.forEach(p=>{const v=a.total?a.counts[p.id]/a.total:0;share[p.id]=v;if(v>=0.05)colors++;});
+  return {colors:colors,fill:a.total/((pad.width/2)*(pad.height/2)),share:share};
+}
+function dqPassed(a){return a.total>=MIN_INK&&dqToday().check(dqMetrics(a));}
+function dqDone(){return state.dq===dqKey();}
+/* ---- モンスターずかん：たおした かずを きろく ---- */
+function dexKey(type,isBoss,name){return isBoss?'b:'+name:type;}
+function dexRecord(type,isBoss,name){
+  if(!state.dex)state.dex={};
+  const k=dexKey(type,isBoss,name);
+  state.dex[k]=Math.min(99999,(state.dex[k]|0)+1);
+}
+function dexEntries(){
+  const list=Object.keys(ENEMY_TYPES).map(t=>({key:t,type:t,name:ENEMY_TYPES[t].name,color:enemyColor(t,0),boss:false}));
+  STAGES.forEach(st=>list.push({key:'b:'+st.boss.name,type:st.boss.type,name:st.boss.name,color:st.boss.color,boss:true}));
+  return list;
+}
+function renderDex(){
+  const box=$('#dexList');box.innerHTML='';
+  const es=dexEntries();let found=0,total=0;
+  es.forEach(e=>{
+    const n=(state.dex&&state.dex[e.key])|0;
+    if(n>0)found++;
+    total+=n;
+    const cv=document.createElement('canvas');cv.width=cv.height=96;
+    try{cv.getContext('2d').drawImage(getSprite(e.type,e.color,e.boss),0,0,96,96);}catch(_){}
+    if(!n)cv.classList.add('unk');
+    const stars=n>=30?'★★★':(n>=10?'★★☆':(n>=1?'★☆☆':'☆☆☆'));
+    box.append(mk('div',{class:'dex-item'+(n?'':' locked')+(e.boss?' boss':'')},
+      cv,
+      mk('div',{class:'dex-name',text:n?e.name:'？？？'}),
+      mk('div',{class:'dex-meta',text:n?(e.boss?'ボス　':'')+n+'たいたおした':'まだ であってない'}),
+      mk('div',{class:'dex-stars',text:stars})
+    ));
+  });
+  $('#dexSummary').textContent='はっけん '+found+' / '+es.length+'　　たおした かず '+total+'\n★ 1たい　★★ 10たい　★★★ 30たい';
+}
+$('#dexBtn').addEventListener('click',()=>{renderDex();show('dex');});
+$('#dexBack').addEventListener('click',()=>{show('home');});
+/* ---- しょうごう（じっせき）：じょうけんを みたすと もらえる ---- */
+function dexTotal(){return Object.keys(state.dex||{}).reduce((a,k)=>a+(state.dex[k]|0),0);}
+function dexFound(){return Object.keys(state.dex||{}).filter(k=>state.dex[k]>0).length;}
+const ACH=[
+  {id:'first',name:'はじめの いっぽ',desc:'なかまを 1にん つくる',p:()=>[state.party.length,1]},
+  {id:'trio',name:'なかま だいしゅうごう',desc:'なかまが 3にんに なる',p:()=>[state.party.length,3]},
+  {id:'kill10',name:'みならい ぼうけんしゃ',desc:'てきを 10たい たおす',p:()=>[dexTotal(),10]},
+  {id:'kill100',name:'ベテラン ぼうけんしゃ',desc:'てきを 100たい たおす',p:()=>[dexTotal(),100]},
+  {id:'kill500',name:'でんせつの ゆうしゃ',desc:'てきを 500たい たおす',p:()=>[dexTotal(),500]},
+  {id:'stage3',name:'ぼうけんの とちゅう',desc:'ステージ3まで クリア',p:()=>[state.cleared,3]},
+  {id:'stage5',name:'ラクガキ おうこくの えいゆう',desc:'ぜんステージ クリア',p:()=>[state.cleared,STAGES.length]},
+  {id:'lvmax',name:'きわめし もの',desc:'Lv.MAXの なかまを つくる',p:()=>[state.party.reduce((m,h)=>Math.max(m,h.lv),0),MAX_LV]},
+  {id:'evo',name:'しんかの きせき',desc:'えを かきたして しんかする',p:()=>[state.party.filter(h=>h.evo).length,1]},
+  {id:'equip',name:'そうびの たつじん',desc:'3にん ぜんいんに そうびを つける',p:()=>[state.party.filter(h=>validItem(h.item)).length,3]},
+  {id:'dq1',name:'おだい ちょうせんしゃ',desc:'きょうの おだいを 1かい クリア',p:()=>[state.dqCount,1]},
+  {id:'dq7',name:'おだい マスター',desc:'きょうの おだいを 7かい クリア',p:()=>[state.dqCount,7]},
+  {id:'dex5',name:'ずかん はかせ',desc:'てきを 5しゅるい はっけん',p:()=>[dexFound(),5]},
+  {id:'dex10',name:'ずかん コンプリート',desc:'てきを ぜんぶ はっけん',p:()=>[dexFound(),10]},
+  {id:'share',name:'ともだちの わ',desc:'なかまを ともだちと こうかんする',p:()=>[(state.shared|0)+(state.received|0),1]}
+];
+function achName(id){const a=ACH.find(x=>x.id===id);return a?a.name:'';}
+/* あたらしく かくとくした しょうごうを かえす。はじめて しらべる ときは しずかに きろくだけ */
+function checkAch(){
+  const quiet=(state.ach===null);
+  if(quiet)state.ach={};
+  const fresh=[];
+  ACH.forEach(a=>{
+    if(state.ach[a.id])return;
+    const pr=a.p();
+    if(pr[0]>=pr[1]){state.ach[a.id]=1;fresh.push(a);}
+  });
+  if(fresh.length){
+    save();
+    if(!quiet)toast('🏅 しょうごう「'+fresh.map(a=>a.name).join('」「')+'」を かくとく！');
+  }else if(quiet)save();
+  return fresh;
+}
+function updateTitleLabel(){
+  const el=$('#titleLabel');if(!el)return;
+  const n=state.title&&state.ach&&state.ach[state.title]?achName(state.title):'';
+  el.hidden=!n;el.textContent=n?'🏅 '+n:'';
+}
+function renderAch(){
+  const box=$('#achList');box.innerHTML='';
+  let got=0;
+  ACH.forEach(a=>{
+    const pr=a.p(),ok=!!(state.ach&&state.ach[a.id]);
+    if(ok)got++;
+    const b=mk('button',{class:'ach-item'+(ok?' got':'')+(state.title===a.id?' cur':''),type:'button'},
+      mk('div',{class:'ach-name',text:(ok?'🏅 ':'🔒 ')+(ok?a.name:'？？？？')}),
+      mk('div',{class:'ach-desc',text:a.desc}),
+      mk('div',{class:'ach-prog',text:ok?(state.title===a.id?'✔ いま つけている しょうごう':'タップで しょうごうに する'):Math.min(pr[0],pr[1])+' / '+pr[1]})
+    );
+    b.disabled=!ok;
+    b.addEventListener('click',()=>{state.title=(state.title===a.id)?'':a.id;save();renderAch();updateTitleLabel();});
+    box.append(b);
+  });
+  $('#achSummary').textContent='かくとく '+got+' / '+ACH.length;
+}
+$('#achBtn').addEventListener('click',()=>{renderAch();show('ach');});
+$('#achBack').addEventListener('click',()=>{renderHome();show('home');});
+
+/* ---- ともだちと こうかん：なかまを コードにして おくる・うけとる ---- */
+const SHARE_PREFIX='RKG1:';
+function b64enc(str){const bytes=new TextEncoder().encode(str);let bin='';bytes.forEach(b=>{bin+=String.fromCharCode(b);});return btoa(bin);}
+function b64dec(b64){const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);return new TextDecoder().decode(bytes);}
+function heroToCode(h){
+  const o={n:h.name,i:h.img,hp:h.hp,a:h.atk,d:h.def,iv:h.interval,c:h.crit,s:h.skill,lv:h.lv,e:h.evo?1:0,l:h.limbs||{},
+    it:validItem(h.item)?{i:h.item.img,k:h.item.kind,p:h.item.power}:null};
+  return SHARE_PREFIX+b64enc(JSON.stringify(o));
+}
+const PNG_URL=/^data:image\/png;base64,[A-Za-z0-9+\/]+={0,2}$/;
+/* ほかの ひとから きた コードは ぜんぶ ちゃんと チェックして、ありえない かずは おさえる */
+function codeToHero(code){
+  try{
+    code=String(code||'').replace(/\s+/g,'');
+    if(code.indexOf(SHARE_PREFIX)!==0||code.length>400000)return null;
+    const o=JSON.parse(b64dec(code.slice(SHARE_PREFIX.length)));
+    if(!o||typeof o.i!=='string'||o.i.length>250000||!PNG_URL.test(o.i))return null;
+    const num=(v,lo,hi,d)=>{v=Number(v);return isFinite(v)?clamp(v,lo,hi):d;};
+    const h={
+      name:(typeof o.n==='string'&&o.n.trim()?o.n.trim():'ともだち').slice(0,8),
+      img:o.i,
+      hp:Math.round(num(o.hp,40,300,100)),atk:Math.round(num(o.a,5,40,12)),def:Math.round(num(o.d,0,20,3)),
+      interval:Math.round(num(o.iv,0.6,1.9,1.2)*100)/100,crit:Math.round(num(o.c,0,0.45,0.05)*100)/100,
+      skill:(typeof o.s==='string'&&has(SKILLS,o.s))?o.s:'black',
+      lv:clamp(Math.round(num(o.lv,1,MAX_LV,1)),1,MAX_LV),exp:0,evo:o.e?1:0,dq:0,
+      limbs:{hands:!!(o.l&&o.l.hands),feet:!!(o.l&&o.l.feet)},item:null
+    };
+    if(o.it&&typeof o.it.i==='string'&&o.it.i.length<80000&&PNG_URL.test(o.it.i)&&typeof o.it.k==='string'&&has(PAL,o.it.k)){
+      const pw=Math.round(num(o.it.p,0.1,1,0.5)*100)/100;
+      h.item={img:o.it.i,kind:o.it.k,power:pw,name:itemName(o.it.k,pw)};
+    }
+    return h;
+  }catch(e){return null;}
+}
+function copyText(t,ta){
+  try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(()=>toast('コピーしたよ！'),()=>{ta.select();toast('えらんだ ぶんを コピーしてね');});return;}}catch(_){}
+  try{ta.select();if(document.execCommand&&document.execCommand('copy')){toast('コピーしたよ！');return;}}catch(_){}
+  toast('コードを せんたくしたよ。コピーしてね');
+}
+function openShare(){
+  const m=$('#modal');m.innerHTML='';
+  const panel=mk('div',{class:'panel share-panel',role:'dialog','aria-modal':'true'});
+  panel.append(mk('div',{class:'rtitle',text:'🤝 ともだちと こうかん'}));
+  panel.append(mk('div',{class:'sh-h',text:'📤 なかまを おくる'}));
+  const out=mk('textarea',{class:'sh-code',rows:'3',placeholder:'おくりたい なかまを えらんでね'});
+  out.readOnly=true;
+  const row=mk('div',{class:'sh-row'});
+  state.party.forEach(h=>row.append(mk('button',{class:'btn sm',type:'button',text:h.name,onclick:()=>{
+    out.value=heroToCode(h);out.select();state.shared=(state.shared|0)+1;save();
+    toast(h.name+' の コードを つくったよ！ コピーして おくろう');
+  }})));
+  if(!state.party.length)row.append(mk('span',{class:'hint',text:'まだ なかまが いないよ'}));
+  panel.append(row,out,mk('div',{class:'sh-row'},mk('button',{class:'btn sm',type:'button',text:'📋 コピー',onclick:()=>{if(out.value)copyText(out.value,out);else toast('さきに なかまを えらんでね');}})));
+  panel.append(mk('div',{class:'sh-h',text:'📥 なかまを うけとる'}));
+  const inp=mk('textarea',{class:'sh-code',rows:'3',placeholder:'ともだちから もらった コードを ここに はりつけてね'});
+  const msg=mk('div',{class:'sh-msg'});
+  const area=mk('div',{class:'sh-row'});
+  const done=(h)=>{state.received=(state.received|0)+1;save();closeModal();renderHome();toast(h.name+' が なかまに くわわった！');};
+  panel.append(inp,area,msg);
+  area.append(mk('button',{class:'btn sm primary',type:'button',text:'うけとる',onclick:()=>{
+    const h=codeToHero(inp.value);
+    if(!h){msg.textContent='コードが ただしくないみたい…（さいごまで コピーできてるかな？）';return;}
+    if(state.party.length<3){state.party.push(h);done(h);return;}
+    msg.textContent='なかまが いっぱい！ だれと いれかえる？';
+    area.innerHTML='';
+    state.party.forEach((old,i)=>area.append(mk('button',{class:'btn sm',type:'button',text:old.name+' と いれかえる',onclick:()=>{state.party[i]=h;done(h);}})));
+    area.append(mk('button',{class:'btn sm',type:'button',text:'やめる',onclick:()=>closeModal()}));
+  }}));
+  panel.append(mk('div',{class:'rbtns'},mk('button',{class:'btn',type:'button',text:'とじる',onclick:()=>closeModal()})));
+  m.append(panel);m.hidden=false;
+}
+$('#shareBtn').addEventListener('click',openShare);
 function skillChip(id){
   const dot=mk('i');dot.style.background=PAL[id].hex;
   return mk('span',{class:'chip'},dot,mk('span',{text:SKILLS[id].name}));
@@ -153,6 +387,7 @@ function limbBtn(hero,key,label){
   return b;
 }
 function renderHome(){
+  checkAch();updateTitleLabel();
   const slots=$('#slots');slots.innerHTML='';
   for(let i=0;i<3;i++){
     const hero=state.party[i];
@@ -161,19 +396,37 @@ function renderHome(){
       const el=mk('div',{class:'slot'});
       el.append(
         mk('div',{class:'slot-img'},mk('img',{alt:hero.name,src:hero.img})),
-        mk('div',{class:'slot-name',text:hero.name}),
-        mk('div',{class:'slot-lv',text:'Lv.'+hero.lv+'　パワー '+powerOf(st)}),
+        mk('div',{class:'slot-name',text:(hero.evo?'★ ':'')+hero.name}),
+        mk('div',{class:'slot-lv',text:'Lv.'+hero.lv+'　パワー '+powerOf(st)+(hero.dq?' 🎨':'')}),
         mk('div',{class:'slot-stats',text:'HP'+st.hp+' ちから'+st.atk+' まもり'+st.def}),
         skillChip(hero.skill),
         mk('div',{class:'opt-row'},limbBtn(hero,'hands','手'),limbBtn(hero,'feet','足')),
         mk('button',{class:'btn sm',type:'button',text:'かきなおす',onclick:()=>openDraw(i)})
       );
+      if(validItem(hero.item)){
+        const ii=mk('img',{alt:hero.item.name,src:hero.item.img});
+        el.append(mk('div',{class:'slot-item'},ii,mk('div',{},mk('b',{text:hero.item.name}),mk('small',{text:itemDesc(hero.item)}))));
+      }
+      el.append(mk('button',{class:'btn sm',type:'button',text:validItem(hero.item)?'🗡 そうびを かきなおす':'🗡 そうびを かく',onclick:()=>openEquip(i)}));
+      if(hero.lv>=MAX_LV&&!hero.evo){
+        el.append(mk('button',{class:'btn sm evo-btn',type:'button',title:'えを かきたして パワーアップ！（1かいだけ）',text:'✨ しんかする！',onclick:()=>openEvolve(i)}));
+      }
       slots.append(el);
     }else{
       slots.append(mk('div',{class:'slot empty'},
         mk('button',{class:'btn add',type:'button',onclick:()=>openDraw(state.party.length)},
           mk('span',{class:'plus',text:'＋'}),mk('span',{text:'ラクガキ'}),mk('span',{text:'する'}))));
     }
+  }
+  const dqc=$('#dqCard');
+  if(dqc){
+    dqc.innerHTML='';
+    dqc.append(
+      mk('b',{text:'🎨 きょうの おだい'}),
+      mk('span',{class:'dq-text',text:dqToday().text}),
+      mk('span',{class:'dq-state'+(dqDone()?' done':''),text:dqDone()?'✔ クリアずみ！':'クリアで そのキャラが +10%'}),
+      mk('small',{text:'これまでの クリア '+state.dqCount+'かい'})
+    );
   }
   const list=$('#stages');list.innerHTML='';
   STAGES.forEach((s,i)=>{
@@ -201,36 +454,78 @@ function renderHome(){
    ===================================================================== */
 const pad=$('#pad'),pctx=pad.getContext('2d');
 let strokes=[],cur=null,drawSlot=0;
-const tool={color:'black',size:10,erase:false};
+const tool={color:'black',size:10,erase:false,sym:false,stamp:null};
 
 function setupStroke(s){
   pctx.lineCap='round';pctx.lineJoin='round';
   pctx.globalCompositeOperation=s.erase?'destination-out':'source-over';
   pctx.strokeStyle=s.erase?'#000':s.color;pctx.fillStyle=s.erase?'#000':s.color;pctx.lineWidth=s.size;
 }
+/* s.sym が ついた ストロークは まんなかを じくに ひだりみぎ たいしょうにも えがく */
+function symFlips(s){return s.sym?[false,true]:[false];}
+function mx(x,flip){return flip?pad.width-x:x;}
 function drawDot(s){
-  pctx.save();setupStroke(s);
-  pctx.beginPath();pctx.arc(s.pts[0][0],s.pts[0][1],s.size/2,0,Math.PI*2);pctx.fill();
-  pctx.restore();
+  for(const f of symFlips(s)){
+    pctx.save();setupStroke(s);
+    pctx.beginPath();pctx.arc(mx(s.pts[0][0],f),s.pts[0][1],s.size/2,0,Math.PI*2);pctx.fill();
+    pctx.restore();
+  }
 }
 function drawSeg(s,a,b){
-  pctx.save();setupStroke(s);
-  pctx.beginPath();pctx.moveTo(a[0],a[1]);pctx.lineTo(b[0],b[1]);pctx.stroke();
-  pctx.restore();
+  for(const f of symFlips(s)){
+    pctx.save();setupStroke(s);
+    pctx.beginPath();pctx.moveTo(mx(a[0],f),a[1]);pctx.lineTo(mx(b[0],f),b[1]);pctx.stroke();
+    pctx.restore();
+  }
+}
+/* ---- スタンプ：かたちを ワンタップで ペタッと ---- */
+const STAMPS=[['pen','✏️','ペン'],['star','⭐','ほし'],['heart','❤️','ハート'],['circle','⚫','まる'],['tri','▲','とんがり']];
+function stampPoly(kind,cx,cy,r){
+  const P=[];
+  if(kind==='star'){for(let i=0;i<10;i++){const a=-Math.PI/2+i*Math.PI/5,rr=i%2?r*0.45:r;P.push([cx+Math.cos(a)*rr,cy+Math.sin(a)*rr]);}}
+  else if(kind==='heart'){for(let i=0;i<40;i++){const t=i/40*Math.PI*2;
+    const x=16*Math.pow(Math.sin(t),3),y=-(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t));
+    P.push([cx+x/17*r,cy+y/17*r+r*0.05]);}}
+  else if(kind==='circle'){for(let i=0;i<28;i++){const a=i/28*Math.PI*2;P.push([cx+Math.cos(a)*r,cy+Math.sin(a)*r]);}}
+  else{P.push([cx,cy-r],[cx+r*0.9,cy+r*0.75],[cx-r*0.9,cy+r*0.75]);}
+  return P;
+}
+function stampRadius(){return tool.size>=20?44:(tool.size>=10?28:16);}
+function drawPoly(s){
+  for(const f of symFlips(s)){
+    pctx.save();setupStroke(s);
+    pctx.beginPath();
+    s.poly.forEach((q,i)=>{if(i)pctx.lineTo(mx(q[0],f),q[1]);else pctx.moveTo(mx(q[0],f),q[1]);});
+    pctx.closePath();pctx.lineWidth=2;pctx.fill();pctx.stroke();
+    pctx.restore();
+  }
 }
 function drawStroke(s){
+  if(s.poly){drawPoly(s);return;}
   if(s.pts.length===1){drawDot(s);return;}
-  pctx.save();setupStroke(s);
-  const p=s.pts;
-  pctx.beginPath();pctx.moveTo(p[0][0],p[0][1]);
-  for(let i=1;i<p.length-1;i++){
-    pctx.quadraticCurveTo(p[i][0],p[i][1],(p[i][0]+p[i+1][0])/2,(p[i][1]+p[i+1][1])/2);
+  for(const f of symFlips(s)){
+    pctx.save();setupStroke(s);
+    const p=s.pts;
+    pctx.beginPath();pctx.moveTo(mx(p[0][0],f),p[0][1]);
+    for(let i=1;i<p.length-1;i++){
+      pctx.quadraticCurveTo(mx(p[i][0],f),p[i][1],mx((p[i][0]+p[i+1][0])/2,f),(p[i][1]+p[i+1][1])/2);
+    }
+    pctx.lineTo(mx(p[p.length-1][0],f),p[p.length-1][1]);
+    pctx.stroke();pctx.restore();
   }
-  pctx.lineTo(p[p.length-1][0],p[p.length-1][1]);
-  pctx.stroke();pctx.restore();
+}
+let baseImg=null,evolveSlot=-1,equipSlot=-1;   /* しんか中は いまの えを した地にして かきたす */
+function drawBase(){
+  if(!baseImg||!baseImg.complete||!baseImg.naturalWidth)return;
+  const box=300,k=Math.min(box/baseImg.naturalWidth,box/baseImg.naturalHeight,2.2);
+  const w=baseImg.naturalWidth*k,h=baseImg.naturalHeight*k;
+  pctx.save();pctx.globalCompositeOperation='source-over';
+  pctx.drawImage(baseImg,(pad.width-w)/2,(pad.height-h)/2,w,h);
+  pctx.restore();
 }
 function redraw(){
   pctx.clearRect(0,0,pad.width,pad.height);
+  drawBase();
   for(const s of strokes)drawStroke(s);
 }
 function padPos(e){
@@ -241,8 +536,14 @@ function padPos(e){
 pad.addEventListener('pointerdown',e=>{
   if(e.pointerType==='mouse'&&e.button!==0)return;
   e.preventDefault();
+  if(tool.stamp&&!tool.erase){
+    const q=padPos(e);
+    strokes.push({color:PAL[tool.color].hex,size:tool.size,erase:false,sym:tool.sym,pts:[q],poly:stampPoly(tool.stamp,q[0],q[1],stampRadius())});
+    redraw();updatePreview();$('#padHint').hidden=true;
+    return;
+  }
   try{pad.setPointerCapture(e.pointerId);}catch(_){}
-  cur={color:PAL[tool.color].hex,size:tool.size,erase:tool.erase,pts:[padPos(e)]};
+  cur={color:PAL[tool.color].hex,size:tool.size,erase:tool.erase,sym:tool.sym,pts:[padPos(e)]};
   strokes.push(cur);drawDot(cur);
   $('#padHint').hidden=true;
 });
@@ -275,6 +576,13 @@ function buildTools(){
     b.addEventListener('click',()=>{tool.color=p.id;tool.erase=false;syncTools();});
     pal.append(b);
   });
+  const stamps=$('#stamps');stamps.innerHTML='';
+  STAMPS.forEach(st=>{
+    const b=mk('button',{class:'btn sm stamp-btn',type:'button',title:st[2],'aria-label':st[2],text:st[1]});
+    b.dataset.k=st[0];
+    b.addEventListener('click',()=>{tool.stamp=st[0]==='pen'?null:st[0];tool.erase=false;syncTools();});
+    stamps.append(b);
+  });
   const sizes=$('#sizes');sizes.innerHTML='';
   [[5,'ほそい',6],[10,'ふつう',12],[20,'ふとい',20]].forEach(s=>{
     const dot=mk('i');dot.style.width=dot.style.height=s[2]+'px';
@@ -289,15 +597,19 @@ function syncTools(){
   $$('#palette .sw').forEach(b=>b.classList.toggle('sel',!tool.erase&&b.dataset.id===tool.color));
   $$('#sizes .size-btn').forEach(b=>b.classList.toggle('on',+b.dataset.size===tool.size));
   $('#eraser').classList.toggle('on',tool.erase);
+  $('#symBtn').classList.toggle('on',tool.sym);
+  $$('#stamps .stamp-btn').forEach(b=>b.classList.toggle('on',!tool.erase&&(b.dataset.k==='pen'?!tool.stamp:b.dataset.k===tool.stamp)));
+  $('.paper-wrap').classList.toggle('sym',tool.sym);
   $('#colorHint').textContent=tool.erase?'けしごむ：かいたところを けせるよ':PAL[tool.color].name+'：'+PAL[tool.color].hint;
 }
 $('#eraser').addEventListener('click',()=>{tool.erase=!tool.erase;syncTools();});
+$('#symBtn').addEventListener('click',()=>{tool.sym=!tool.sym;syncTools();});
 $('#undo').addEventListener('click',()=>{
   strokes.pop();redraw();updatePreview();
-  if(!strokes.length)$('#padHint').hidden=false;
+  if(!strokes.length&&!baseImg)$('#padHint').hidden=false;
 });
 $('#clear').addEventListener('click',()=>{
-  strokes=[];redraw();updatePreview();$('#padHint').hidden=false;
+  strokes=[];redraw();updatePreview();$('#padHint').hidden=!!baseImg;
 });
 
 /* ---- 解析：えからステータスをつくる ---- */
@@ -344,9 +656,28 @@ function computeBase(a){
 function updatePreview(){
   let a;
   try{a=analyze();}catch(e){a={total:0,counts:{}};}
+  if(equipSlot>=0){
+    const okE=a.total>=ITEM_MIN_INK;
+    $('#pvEmpty').hidden=true;$('#pvBody').hidden=true;
+    $('#doneBtn').disabled=!okE;
+    const dl0=$('#dqLine');if(dl0)dl0.hidden=true;
+    const el=$('#eqLine');
+    if(el){el.hidden=false;if(okE){const it=itemFrom(a);el.textContent='🗡 '+it.name+'　'+itemDesc(it);el.className='dq-line pass';}else{el.textContent='🗡 そうびを かこう！ あか＝つるぎ・あお＝たて・みどり＝ブーツ・きいろ＝かんむり…（おおきく かくほど つよい）';el.className='dq-line';}}
+    return;
+  }
   const ok=a.total>=MIN_INK;
   $('#pvEmpty').hidden=ok;$('#pvBody').hidden=!ok;
-  $('#doneBtn').disabled=!ok;
+  $('#doneBtn').disabled=!ok||(evolveSlot>=0&&!strokes.length);
+  const dl=$('#dqLine');
+  if(dl){
+    if(evolveSlot>=0){dl.hidden=true;}
+    else{
+      dl.hidden=false;
+      const pass=ok&&dqPassed(a);
+      dl.className='dq-line'+(pass?' pass':'');
+      dl.textContent=(dqDone()?'🎨 きょうの おだい（クリアずみ）：':'🎨 きょうの おだい：')+dqToday().text+(pass?'　✔ OK！':'');
+    }
+  }
   if(!ok)return;
   const b=computeBase(a);
   const spd=clamp((1.9-b.interval)/1.3,0,1);
@@ -369,7 +700,18 @@ function syncOpts(){
 }
 $('#optHands').addEventListener('click',()=>{drawOpts.hands=!drawOpts.hands;syncOpts();});
 $('#optFeet').addEventListener('click',()=>{drawOpts.feet=!drawOpts.feet;syncOpts();});
+function setDrawTitle(mode){
+  const eq=mode==='equip',evo=mode===true;
+  const h=$('#draw h2');if(h)h.textContent=eq?'🗡 そうびを かこう':(evo?'✨ しんか！ えを かきたそう':'ラクガキする');
+  $('#doneBtn').textContent=eq?'そうびする！':(evo?'しんかする！':$('#doneBtn').dataset.label||$('#doneBtn').textContent);
+  $('#nameInput').style.display=eq?'none':'';
+  $$('#draw .opt-row,#draw .opt-hint').forEach(e=>{e.style.display=eq?'none':'';});
+  const eqL=$('#eqLine');if(eqL)eqL.hidden=!eq;
+}
 function openDraw(i){
+  baseImg=null;evolveSlot=-1;equipSlot=-1;
+  if(!$('#doneBtn').dataset.label)$('#doneBtn').dataset.label=$('#doneBtn').textContent;
+  setDrawTitle(false);
   drawSlot=Math.min(i,state.party.length);
   const exist=state.party[drawSlot];
   drawOpts.hands=!!(exist&&exist.limbs&&exist.limbs.hands);drawOpts.feet=!!(exist&&exist.limbs&&exist.limbs.feet);syncOpts();
@@ -380,7 +722,61 @@ function openDraw(i){
   buildTools();redraw();updatePreview();
   show('draw');
 }
+function openEquip(i){
+  const hero=state.party[i];
+  if(!hero)return;
+  if(!$('#doneBtn').dataset.label)$('#doneBtn').dataset.label=$('#doneBtn').textContent;
+  drawSlot=i;equipSlot=i;evolveSlot=-1;baseImg=null;
+  strokes=[];cur=null;tool.erase=false;
+  if((PAL[tool.color].unlock||0)>state.cleared)tool.color='black';
+  $('#padHint').hidden=false;
+  setDrawTitle('equip');
+  buildTools();redraw();updatePreview();
+  show('draw');
+  toast('そうびを かこう！ いろで こうかが かわるよ');
+}
+function openEvolve(i){
+  const hero=state.party[i];
+  if(!hero||hero.lv<MAX_LV||hero.evo)return;
+  if(!$('#doneBtn').dataset.label)$('#doneBtn').dataset.label=$('#doneBtn').textContent;
+  drawSlot=i;evolveSlot=i;equipSlot=-1;
+  drawOpts.hands=!!(hero.limbs&&hero.limbs.hands);drawOpts.feet=!!(hero.limbs&&hero.limbs.feet);syncOpts();
+  strokes=[];cur=null;tool.erase=false;
+  if((PAL[tool.color].unlock||0)>state.cleared)tool.color='black';
+  $('#nameInput').value=hero.name;
+  $('#padHint').hidden=true;
+  setDrawTitle(true);
+  buildTools();
+  baseImg=new Image();
+  baseImg.onload=()=>{redraw();updatePreview();};
+  baseImg.src=hero.img;
+  redraw();updatePreview();
+  show('draw');
+  toast('いまの えに かきたして パワーアップ！ （1かいだけ）');
+}
+function finishEquip(){
+  let a;
+  try{a=analyze();}catch(e){return;}
+  if(a.total<ITEM_MIN_INK){toast('もうすこし かいてみよう！');return;}
+  const hero=state.party[equipSlot];
+  if(!hero){return;}
+  const it=itemFrom(a);
+  const pad6=6;
+  const sx=Math.max(0,a.minX-pad6),sy=Math.max(0,a.minY-pad6);
+  const ex=Math.min(pad.width,a.maxX+pad6),ey=Math.min(pad.height,a.maxY+pad6);
+  const bw=Math.max(1,ex-sx),bh=Math.max(1,ey-sy);
+  const sc=Math.min(1,96/Math.max(bw,bh));
+  const out=document.createElement('canvas');
+  out.width=Math.max(1,Math.round(bw*sc));out.height=Math.max(1,Math.round(bh*sc));
+  out.getContext('2d').drawImage(pad,sx,sy,bw,bh,0,0,out.width,out.height);
+  it.img=out.toDataURL('image/png');
+  hero.item=it;
+  equipSlot=-1;setDrawTitle(false);
+  save();renderHome();show('home');
+  toast(hero.name+' は '+it.name+' を そうびした！（'+itemDesc(it)+'）');
+}
 function finishDrawing(){
+  if(equipSlot>=0){finishEquip();return;}
   let a;
   try{a=analyze();}catch(e){return;}
   if(a.total<MIN_INK){toast('もうすこし かいてみよう！');return;}
@@ -395,17 +791,35 @@ function finishDrawing(){
   out.getContext('2d').drawImage(pad,sx,sy,bw,bh,0,0,out.width,out.height);
   let name=$('#nameInput').value.trim();
   if(!name)name=DEFAULT_NAMES[Math.floor(Math.random()*DEFAULT_NAMES.length)];
+  if(evolveSlot>=0&&state.party[evolveSlot]){
+    const old=state.party[evolveSlot];
+    if(!strokes.length){toast('なにか かきたしてね！');return;}
+    old.img=out.toDataURL('image/png');
+    old.name=name.slice(0,8);
+    old.hp=Math.max(old.hp,b.hp);old.atk=Math.max(old.atk,b.atk);old.def=Math.max(old.def,b.def);
+    old.interval=Math.min(old.interval,b.interval);old.crit=Math.max(old.crit,b.crit);
+    old.skill=b.skill;old.evo=1;
+    old.limbs={hands:drawOpts.hands,feet:drawOpts.feet};
+    baseImg=null;evolveSlot=-1;setDrawTitle(false);
+    save();renderHome();show('home');
+    toast('★ '+old.name+' が しんかした！ パワーが 25% アップ！');
+    return;
+  }
+  const oldHero=drawSlot<state.party.length?state.party[drawSlot]:null;
+  const gotDq=!dqDone()&&dqPassed(a);
   const hero={
     name:name.slice(0,8),img:out.toDataURL('image/png'),
     hp:b.hp,atk:b.atk,def:b.def,interval:b.interval,crit:b.crit,skill:b.skill,lv:1,exp:0,
-    limbs:{hands:drawOpts.hands,feet:drawOpts.feet}
+    limbs:{hands:drawOpts.hands,feet:drawOpts.feet},dq:gotDq?1:0,
+    item:(oldHero&&validItem(oldHero.item))?oldHero.item:null   /* かきなおしても そうびは のこる */
   };
+  if(gotDq){state.dq=dqKey();state.dqCount=(state.dqCount|0)+1;}
   if(drawSlot<state.party.length)state.party[drawSlot]=hero;else state.party.push(hero);
   save();renderHome();show('home');
-  toast(hero.name+' が なかまに なった！');
+  toast(gotDq?'🎨 おだいクリア！ '+hero.name+' が +10% で なかまに なった！':hero.name+' が なかまに なった！');
 }
 $('#doneBtn').addEventListener('click',finishDrawing);
-$('#cancelBtn').addEventListener('click',()=>{renderHome();show('home');});
+$('#cancelBtn').addEventListener('click',()=>{baseImg=null;evolveSlot=-1;equipSlot=-1;setDrawTitle(false);renderHome();show('home');});
 
 /* =====================================================================
    てきのスプライト（てがきふうに プログラムで かく）
@@ -1314,6 +1728,7 @@ function buildCards(){
     const hpFill=mk('i'),skFill=mk('i'),hpn=mk('div',{class:'hpn'});
     const btn=mk('button',{class:'card',type:'button'},
       mk('img',{alt:'',src:u.hero.img}),
+      validItem(u.hero.item)?mk('img',{class:'citem',alt:u.hero.item.name,title:u.hero.item.name,src:u.hero.item.img}):document.createTextNode(''),
       mk('div',{class:'cname',text:u.name}),
       mk('div',{class:'bar'},hpFill),
       hpn,
@@ -1478,6 +1893,7 @@ function processEvents(){
       }
       case 'kill':{
         const u=ev.u,c=centerW(u);
+        if(u.kind==='mon')dexRecord(u.spriteType,u.boss,u.name);
         sfx(u.kind==='hero'?'down':'kill');
         if(u.kind==='hero'){burst(c[0],c[1],c[2],'#ccc',12,200);}
         else{
@@ -1712,6 +2128,23 @@ function drawJelly(st,sc,x,y,pose){
   }
   c.restore();
 }
+const itemArt={};
+function itemImgFor(it){
+  if(!validItem(it))return null;
+  let im=itemArt[it.img];
+  if(!im){im=new Image();im.src=it.img;itemArt[it.img]=im;}
+  return (im.complete&&im.naturalWidth)?im:null;
+}
+function drawItem2D(u,pose,feet,dw,dh){
+  const im=itemImgFor(u.hero.item);
+  if(!im)return;
+  const k=Math.min(38/im.naturalWidth,38/im.naturalHeight,1.6),w=im.naturalWidth*k,h=im.naturalHeight*k;
+  const bob=Math.sin(R.t*3+u.slot)*2;
+  ctx.save();
+  ctx.globalAlpha=u.alive?1:0.4;
+  ctx.drawImage(im,u.x+pose.ox+dw/2-w*0.35,feet+pose.oy-dh*0.28-h/2+bob,w,h);
+  ctx.restore();
+}
 function drawHero2D(u){
   const S=B.S,art=heroArtFor(u.hero);
   if(!art.st)return;
@@ -1721,6 +2154,7 @@ function drawHero2D(u){
   const pose=poseFor(u);
   drawShadow(u.x,feet,dw*0.4*(1+pose.oy/60),u.alive?0.22:0.12);
   drawJelly(st,sc,u.x,feet,pose);
+  drawItem2D(u,pose,feet,dw,dh);
   if(S.buff[u.side].shield>0&&u.alive){
     const c=ctx;
     c.save();c.translate(u.x+pose.ox,feet+pose.oy);
@@ -2136,6 +2570,19 @@ function makeHeroObj(hero){
   const o=(B.puffy&&art.pf)?makePuffy(art.pf,sc,0):makeStandee(st,sc,0);
   const lm=hero.limbs;
   if(GL.limbGeo&&lm&&(lm.hands||lm.feet))makeLimbs(o,analyzeLimbs(art),sc,lm);
+  if(validItem(hero.item)&&typeof THREE!=='undefined'){
+    try{
+      const cv=document.createElement('canvas');cv.width=cv.height=64;
+      const tex=new THREE.CanvasTexture(cv);tex.minFilter=THREE.LinearFilter;tex.generateMipmaps=false;
+      const im=new Image();
+      im.onload=()=>{const c=cv.getContext('2d'),k=Math.min(60/im.naturalWidth,60/im.naturalHeight);c.clearRect(0,0,64,64);c.drawImage(im,(64-im.naturalWidth*k)/2,(64-im.naturalHeight*k)/2,im.naturalWidth*k,im.naturalHeight*k);tex.needsUpdate=true;};
+      im.src=hero.item.img;
+      const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,alphaTest:0.1,side:THREE.DoubleSide});
+      const m=new THREE.Mesh(new THREE.PlaneGeometry(36,36),mat);
+      m.position.set(o.w/2+4,o.h*0.3,10);m.frustumCulled=false;
+      o.group.add(m);o.itemMesh=m;o.itemTex=tex;
+    }catch(e){}
+  }
   return o;
 }
 function makeMonsterObj(spriteType,color,boss,size){
@@ -2250,6 +2697,7 @@ function disposeObj3(o){
   o.mats.forEach(m=>m.dispose());
   o.shadow.material.dispose();
   if(o.bubble){o.bubble.geometry.dispose();o.bubble.material.dispose();}
+  if(o.itemMesh){o.itemMesh.geometry.dispose();o.itemMesh.material.dispose();if(o.itemTex)o.itemTex.dispose();}
   if(o.limbs)o.limbs.parts.forEach(g=>g.traverse(m=>{if(m.material)m.material.dispose();}));
 }
 function clearUnits3D(){
@@ -2525,7 +2973,7 @@ function bgmPlay(name){
   if(!SND.timer)SND.timer=setInterval(bgmSchedule,110);
 }
 function bgmStop(){SND.cur=null;SND.curName='';}
-const BGM_MAP={home:'calm',draw:'calm',field:'field',battle:'battle',vs:'battle',boss:'boss'};
+const BGM_MAP={home:'calm',dex:'calm',ach:'calm',draw:'calm',field:'field',battle:'battle',vs:'battle',boss:'boss'};
 function sndScene(name){
   SND.want=BGM_MAP[name]||null;
   if(SND.ctx&&SND.mode>=2)bgmPlay(SND.want);
@@ -3240,7 +3688,7 @@ function vsSetBar(u){
 }
 function vsRefreshPlates(){
   const S=VS.S,h=vsCurHero(S),m=S.mon;
-  $('#vsHeroName').textContent=h.name+'　Lv.'+h.hero.lv;
+  $('#vsHeroName').textContent=h.name+'　Lv.'+h.hero.lv+(validItem(h.hero.item)?'　🗡'+h.hero.item.name:'');
   $('#vsHeroThumb').src=h.hero.img;
   vsSetBar(h);
   if(m){
@@ -3412,7 +3860,11 @@ function vsOpenSwitch(forced){
 }
 
 /* ---- プレイヤーの こうどう ---- */
+function dexFromEvents(events){
+  events.forEach(e=>{if(e&&e.t==='ko'&&e.unit&&e.unit.kind==='mon')dexRecord(e.unit.type,e.unit.isBoss,e.unit.name);});
+}
 function vsRunEvents(events){
+  dexFromEvents(events);   /* ずかんは できごとが うまれた時点で きろく（えんしゅつの とちゅうで ぬけても OK） */
   const steps=[];
   events.forEach(e=>{
     if(['nextFoeReady','needSwitch','end','ran'].indexOf(e.t)>=0)return;
